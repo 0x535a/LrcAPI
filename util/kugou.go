@@ -35,7 +35,7 @@ func KugouGetMusic(keyword string) (*[]string, *[]string, *[]string, error) {
 	if KugouCookie != "" {
 		req.Header.Set("Cookie", KugouCookie)
 	}
-	resp, err := GlobalHTTPClient.Do(req)
+	resp, err := HTTPDo(req)
 	switch {
 	case err != nil:
 		return nil, nil, nil, errors.WithStack(err)
@@ -79,7 +79,7 @@ func KugouGetLyric(hash string) (*LyricResult, error) {
 	req, _ := http.NewRequest("GET", fmt.Sprintf(kugouKRCSearchTmpl, hash), nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	req.Header.Set("Accept", "*/*")
-	resp, err := GlobalHTTPClient.Do(req)
+	resp, err := HTTPDo(req)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -105,7 +105,7 @@ func KugouGetLyric(hash string) (*LyricResult, error) {
 	if KugouCookie != "" {
 		dlReq.Header.Set("Cookie", KugouCookie)
 	}
-	dlResp, err := GlobalHTTPClient.Do(dlReq)
+	dlResp, err := HTTPDo(dlReq)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

@@ -77,7 +77,7 @@ func QQGetMusic(keyword string) (*[]string, *[]string, *[]string, *[]string, err
 	if QQCookie != "" {
 		req.Header.Set("Cookie", QQCookie)
 	}
-	resp, err := GlobalHTTPClient.Do(req)
+	resp, err := HTTPDo(req)
 	switch {
 	case err != nil:
 		return nil, nil, nil, nil, errors.WithStack(err)
@@ -171,7 +171,7 @@ func qqGetQRC(mid string) (*LyricResult, error) {
 	if QQCookie != "" {
 		req.Header.Set("Cookie", QQCookie)
 	}
-	resp, err := GlobalHTTPClient.Do(req)
+	resp, err := HTTPDo(req)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -211,7 +211,7 @@ func qqGetLRCFallback(mid string) (*LyricResult, error) {
 	if QQCookie != "" {
 		req.Header.Set("Cookie", QQCookie)
 	}
-	resp, err := GlobalHTTPClient.Do(req)
+	resp, err := HTTPDo(req)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

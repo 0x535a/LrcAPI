@@ -53,7 +53,7 @@ func NeteaseGetLyric(ID string) (*LyricResult, error) {
 	if NeteaseCookie != "" {
 		req.Header.Set("Cookie", NeteaseCookie)
 	}
-	resp, err := GlobalHTTPClient.Do(req)
+	resp, err := HTTPDo(req)
 	switch {
 	case err != nil:
 		return nil, errors.WithStack(err)
@@ -80,7 +80,7 @@ func NeteaseGetMusic(Title, Artist string) (*[]string, *[]string, *[]string, err
 	req.Header.Set("User-Agent", UA)
 	req.Header.Set("Referer", "https://music.163.com/")
 	req.Header.Set("Origin", "https://music.163.com/")
-	resp, err := GlobalHTTPClient.Do(req)
+	resp, err := HTTPDo(req)
 	switch {
 	case err != nil:
 		return nil, nil, nil, errors.WithStack(err)
