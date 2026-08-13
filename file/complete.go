@@ -3,6 +3,7 @@ package file
 import (
 	"log"
 	"sync"
+	"time"
 
 	"lrcAPI/util"
 
@@ -12,6 +13,66 @@ import (
 
 // 同一 cache_key 的补全任务去重，避免并发请求重复调用大模型。
 var completeInflight sync.Map
+
+var (
+	completeFailLimit = 3
+	completeCooldown  = 24 * time.Hour
+)
+
+type failState struct {
+	count     int
+	coolUntil time.Time
+}
+
+var completeFailures sync.Map
+
+func resetCompleteFailures() {
+	completeFailures.Range(func(k, _ any) bool {
+		completeFailures.Delete(k)
+		return true
+	})
+}
+
+func failKey(cacheKey, lyricID string) string {
+	return cacheKey + "#" + lyricID
+}
+
+func shouldSkipComplete(cacheKey, lyricID string) bool {
+	v, ok := completeFailures.Load(failKey(cacheKey, lyricID))
+	if !ok {
+		return false
+	}
+	st := v.(failState)
+	if st.coolUntil.IsZero() {
+		return false
+	}
+	if time.Now().Before(st.coolUntil) {
+		return true
+	}
+	completeFailures.Delete(failKey(cacheKey, lyricID))
+	return false
+}
+
+func recordCompleteFail(cacheKey, lyricID string) {
+	key := failKey(cacheKey, lyricID)
+	var st failState
+	if v, ok := completeFailures.Load(key); ok {
+		st = v.(failState)
+	}
+	if !st.coolUntil.IsZero() && time.Now().Before(st.coolUntil) {
+		return
+	}
+	st.count++
+	if st.count >= completeFailLimit {
+		st.coolUntil = time.Now().Add(completeCooldown)
+		log.Printf("lyric completion: cooling down %q for %s after %d failures", key, completeCooldown, st.count)
+	}
+	completeFailures.Store(key, st)
+}
+
+func recordCompleteSuccess(cacheKey, lyricID string) {
+	completeFailures.Delete(failKey(cacheKey, lyricID))
+}
 
 // computeComplete 计算一条歌词是否完备：fallback 占位恒完备，其余按内容判定。
 func computeComplete(source, lyric, romaji string) bool {
@@ -85,12 +146,23 @@ func completeLyrics(cacheKey string) error {
 		if row.source == "fallback" || row.complete {
 			continue
 		}
-		newLyric, newRomaji, changed, err := util.CompleteLyric(row.lyric, row.romaji)
-		if err != nil {
-			util.ErrorPrinter(errors.Wrap(err, "CompleteLyric "+cacheKey+"#"+row.lyricID))
+		if shouldSkipComplete(cacheKey, row.lyricID) {
 			continue
 		}
+		newLyric, newRomaji, changed, err := util.CompleteLyric(row.lyric, row.romaji)
+		if err != nil {
+			recordCompleteFail(cacheKey, row.lyricID)
+			util.ErrorPrinter(errors.Wrap(err, "CompleteLyric "+cacheKey+"#"+row.lyricID))
+			if !changed {
+				continue
+			}
+		}
 		nowComplete := computeComplete(row.source, newLyric, newRomaji)
+		if nowComplete {
+			recordCompleteSuccess(cacheKey, row.lyricID)
+		} else if err == nil {
+			recordCompleteFail(cacheKey, row.lyricID)
+		}
 		// 内容有更新，或存储的 is_complete 与实际不一致（自愈旧数据）时都写回
 		if changed || nowComplete != row.complete {
 			updates = append(updates, update{

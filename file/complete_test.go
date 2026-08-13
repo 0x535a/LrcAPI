@@ -1,8 +1,13 @@
 package file
 
 import (
+	"errors"
 	"path/filepath"
+	"regexp"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"lrcAPI/util"
 )
@@ -67,4 +72,194 @@ func useTempLyricsDB(t *testing.T) {
 	t.Cleanup(func() {
 		lyricsDBPath = oldPath
 	})
+}
+
+func enableTestLLM(t *testing.T) {
+	t.Helper()
+	prevK, prevU, prevM := util.OpenAIAPIKey, util.OpenAIBaseURL, util.OpenAIModel
+	util.OpenAIAPIKey = "test-key"
+	util.OpenAIBaseURL = "http://127.0.0.1:9"
+	util.OpenAIModel = "test-model"
+	t.Cleanup(func() {
+		util.OpenAIAPIKey, util.OpenAIBaseURL, util.OpenAIModel = prevK, prevU, prevM
+	})
+}
+
+var numberedLineRe = regexp.MustCompile(`^\s*(\d+)\s*[\.\)\:：．、]\s*(.*)$`)
+
+func mockTranslate(system, user string) (string, error) {
+	prefix := "译"
+	if strings.Contains(system, "罗马音") {
+		prefix = "roma "
+	}
+	var out []string
+	for _, line := range strings.Split(user, "\n") {
+		if m := numberedLineRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			out = append(out, m[1]+". "+prefix+m[2])
+			continue
+		}
+		out = append(out, prefix+line)
+	}
+	return strings.Join(out, "\n"), nil
+}
+
+func writeIncompleteJA(t *testing.T, cacheKey, lyricID string) {
+	t.Helper()
+	f := File{FolderName: cacheKey}
+	f.InfoLyric = []InfoLyric{{
+		ID:     lyricID,
+		Title:  "テスト",
+		Artist: "artist",
+		Lyric:  "[00:01.00]こんにちは\n[00:05.00]ありがとう",
+		Type:   "lrc",
+		Source: "netease",
+	}}
+	if err := f.WriteLyric(); err != nil {
+		t.Fatalf("WriteLyric: %v", err)
+	}
+}
+
+func TestCompleteFailCooldown(t *testing.T) {
+	resetCompleteFailures()
+	t.Cleanup(resetCompleteFailures)
+	oldLimit, oldCool := completeFailLimit, completeCooldown
+	completeFailLimit = 3
+	completeCooldown = time.Hour
+	t.Cleanup(func() {
+		completeFailLimit, completeCooldown = oldLimit, oldCool
+	})
+
+	key, id := "a - b", "0"
+	if shouldSkipComplete(key, id) {
+		t.Fatal("should not skip initially")
+	}
+	recordCompleteFail(key, id)
+	recordCompleteFail(key, id)
+	if shouldSkipComplete(key, id) {
+		t.Fatal("should not skip before limit")
+	}
+	recordCompleteFail(key, id)
+	if !shouldSkipComplete(key, id) {
+		t.Fatal("should skip after limit")
+	}
+	recordCompleteSuccess(key, id)
+	if shouldSkipComplete(key, id) {
+		t.Fatal("should not skip after success")
+	}
+}
+
+func TestCompleteCooldownExpires(t *testing.T) {
+	resetCompleteFailures()
+	t.Cleanup(resetCompleteFailures)
+	oldLimit, oldCool := completeFailLimit, completeCooldown
+	completeFailLimit = 1
+	completeCooldown = 20 * time.Millisecond
+	t.Cleanup(func() {
+		completeFailLimit, completeCooldown = oldLimit, oldCool
+	})
+
+	key, id := "a - b", "1"
+	recordCompleteFail(key, id)
+	if !shouldSkipComplete(key, id) {
+		t.Fatal("should skip during cooldown")
+	}
+	time.Sleep(40 * time.Millisecond)
+	if shouldSkipComplete(key, id) {
+		t.Fatal("should not skip after cooldown")
+	}
+}
+
+func TestCompleteLyricsSkipsCooldown(t *testing.T) {
+	useTempLyricsDB(t)
+	enableTestLLM(t)
+	resetCompleteFailures()
+	t.Cleanup(resetCompleteFailures)
+	oldLimit, oldCool := completeFailLimit, completeCooldown
+	completeFailLimit = 2
+	completeCooldown = time.Hour
+	t.Cleanup(func() {
+		completeFailLimit, completeCooldown = oldLimit, oldCool
+	})
+
+	cacheKey := "artist - title"
+	writeIncompleteJA(t, cacheKey, "0")
+	recordCompleteFail(cacheKey, "0")
+	recordCompleteFail(cacheKey, "0")
+
+	var calls atomic.Int32
+	restore := util.SwapInvokeChat(func(system, user string) (string, error) {
+		calls.Add(1)
+		return mockTranslate(system, user)
+	})
+	defer restore()
+
+	if err := completeLyrics(cacheKey); err != nil {
+		t.Fatalf("completeLyrics: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("LLM called %d times during cooldown", calls.Load())
+	}
+}
+
+func TestCompleteLyricsWritesPartialOnRomaError(t *testing.T) {
+	useTempLyricsDB(t)
+	enableTestLLM(t)
+	resetCompleteFailures()
+	t.Cleanup(resetCompleteFailures)
+
+	cacheKey := "artist - partial"
+	writeIncompleteJA(t, cacheKey, "0")
+
+	defer util.SwapLLMRetry(1, nil)()
+	restore := util.SwapInvokeChat(func(system, user string) (string, error) {
+		if strings.Contains(system, "罗马音") {
+			return "", errors.New("unexpected end of JSON input")
+		}
+		return mockTranslate(system, user)
+	})
+	defer restore()
+
+	if err := completeLyrics(cacheKey); err != nil {
+		t.Fatalf("completeLyrics: %v", err)
+	}
+
+	var read File
+	read.FolderName = cacheKey
+	if err := read.ReadLyric(); err != nil {
+		t.Fatalf("ReadLyric: %v", err)
+	}
+	if len(read.InfoLyric) != 1 {
+		t.Fatalf("rows=%d", len(read.InfoLyric))
+	}
+	got := read.InfoLyric[0]
+	if !strings.Contains(got.Lyric, "译") {
+		t.Fatalf("expected partial translation written: %s", got.Lyric)
+	}
+	if got.IsComplete {
+		t.Fatal("should still be incomplete without romaji")
+	}
+}
+
+func TestCompleteLyricsMockRoundTrip(t *testing.T) {
+	useTempLyricsDB(t)
+	enableTestLLM(t)
+	resetCompleteFailures()
+	t.Cleanup(resetCompleteFailures)
+
+	cacheKey := "artist - ok"
+	writeIncompleteJA(t, cacheKey, "0")
+	restore := util.SwapInvokeChat(mockTranslate)
+	defer restore()
+
+	if err := completeLyrics(cacheKey); err != nil {
+		t.Fatalf("completeLyrics: %v", err)
+	}
+	var read File
+	read.FolderName = cacheKey
+	if err := read.ReadLyric(); err != nil {
+		t.Fatalf("ReadLyric: %v", err)
+	}
+	if !read.InfoLyric[0].IsComplete {
+		t.Fatal("expected complete")
+	}
 }
