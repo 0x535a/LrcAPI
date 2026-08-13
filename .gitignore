@@ -6,3 +6,5 @@ lrcAPI
 .env
 # docker-compose 持久化目录
 /data
+/doc
+
