@@ -40,6 +40,10 @@ func ParseLrc(lrc string) []LyricLine {
 // originalAndTranslation 把（可能已混合翻译的）歌词按时间戳分组，
 // 返回每个时间戳的「原文」行与「译文」行。
 // 混合格式为同一时间戳连续出现两次：第一次为原文，第二次为译文。
+func SplitOriginalAndTranslation(lrc string) (original []LyricLine, translation []LyricLine) {
+	return originalAndTranslation(lrc)
+}
+
 func originalAndTranslation(lrc string) (original []LyricLine, translation []LyricLine) {
 	lines := ParseLrc(lrc)
 	seen := make(map[string]int)
