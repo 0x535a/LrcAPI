@@ -3,6 +3,7 @@ package util
 import (
 	"bufio"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -38,14 +39,24 @@ var (
 	OpenAIModel string
 )
 
-// LoadEnv 读取 .env 文件（若存在）并把其中的键值对写入进程环境变量，
+// LoadEnv 从给定 .env 文件（若存在）读取键值对写入进程环境变量，
 // 已存在的环境变量不会被覆盖。随后把平台凭据读取到包级变量。
 // 这样二进制直接运行时可用 .env，容器部署时可用 docker-compose 的 environment。
+//
+// path 为空时依次尝试 ".env" 与 "assets/.env"（后者对应容器内把数据目录
+// 挂载到 /app/assets 的部署方式，.env 与 lyrics.db 放在同一目录）。
 func LoadEnv(path string) {
 	if path == "" {
-		path = ".env"
+		for _, candidate := range []string{".env", filepath.Join("assets", ".env")} {
+			if _, err := os.Stat(candidate); err == nil {
+				path = candidate
+				break
+			}
+		}
 	}
-	loadDotEnvFile(path)
+	if path != "" {
+		loadDotEnvFile(path)
+	}
 
 	NeteaseCookie = os.Getenv("NETEASE_COOKIE")
 	QQCookie = os.Getenv("QQ_COOKIE")

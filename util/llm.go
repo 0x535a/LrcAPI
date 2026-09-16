@@ -47,6 +47,26 @@ func LLMEnabled() bool {
 	return OpenAIAPIKey != "" && OpenAIBaseURL != "" && OpenAIModel != ""
 }
 
+// LogLLMConfigWarning 在启动时输出 LLM 配置状态，避免补全功能
+// 因配置缺失而静默关闭（历史上生产环境曾因此长期未生效且无任何日志）。
+func LogLLMConfigWarning() {
+	if LLMEnabled() {
+		log.Printf("LLM lyric completion enabled (model %s via %s)", OpenAIModel, OpenAIBaseURL)
+		return
+	}
+	missing := make([]string, 0, 3)
+	if OpenAIAPIKey == "" {
+		missing = append(missing, "OPENAI_API_KEY")
+	}
+	if OpenAIBaseURL == "" {
+		missing = append(missing, "OPENAI_BASE_URL")
+	}
+	if OpenAIModel == "" {
+		missing = append(missing, "OPENAI_MODEL")
+	}
+	log.Printf("WARNING: LLM lyric completion disabled: missing %s; foreign lyrics will not be auto-translated/romanized", strings.Join(missing, ", "))
+}
+
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
