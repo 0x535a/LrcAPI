@@ -31,23 +31,13 @@ workflow:
       - build/
     expire_in: 90 days
 
-build:self-hosted:
+build:binary:
   extends: .build-binary
   tags:
     - self-hosted
   parallel:
     matrix:
-      - GOOS: [linux, windows]
-        GOARCH: [amd64, arm64]
-
-# Go cross-compiles Darwin binaries; this job does not need a macOS runner.
-build:macos:
-  extends: .build-binary
-  tags:
-    - self-hosted
-  parallel:
-    matrix:
-      - GOOS: darwin
+      - GOOS: [linux, windows, darwin]
         GOARCH: [amd64, arm64]
 
 docker:
@@ -89,9 +79,7 @@ release:
   tags:
     - self-hosted
   needs:
-    - job: build:self-hosted
-      artifacts: true
-    - job: build:macos
+    - job: build:binary
       artifacts: true
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v/'
