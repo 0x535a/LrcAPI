@@ -41,9 +41,10 @@ build:self-hosted:
         GOARCH: [amd64, arm64]
 
 # Go cross-compiles Darwin binaries; this job does not need a macOS runner.
-# Leave it untagged for now, as requested.
 build:macos:
   extends: .build-binary
+  tags:
+    - self-hosted
   parallel:
     matrix:
       - GOOS: darwin
