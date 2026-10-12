@@ -14,10 +14,6 @@ workflow:
 
 .build-binary:
   stage: build
-  rules:
-    - if: '$DOCKER_ONLY == "true" && $CI_COMMIT_BRANCH == "main"'
-      when: never
-    - when: on_success
   image: golang:1.25-alpine
   variables:
     CGO_ENABLED: "0"
@@ -46,11 +42,6 @@ build:binary:
 
 docker:
   stage: build
-  retry:
-    max: 2
-    when:
-      - runner_system_failure
-      - script_failure
   image: docker:29-cli
   tags:
     - self-hosted
