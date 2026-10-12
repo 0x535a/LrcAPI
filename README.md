@@ -36,8 +36,8 @@
 # 使用方法和效果
 演示是没有命中缓存的效果，命中之后更快
 <div style="display: flex; justify-content: center;align-items: center;">
-  <img src="https://raw.githubusercontent.com/stephen-zeng/img/master/20250409232913.png">
-  <img src="https://gh.qwqwq.com.cn/stephen-zeng/img/master/e1d6503ad000a2fd92f71f3afce7d059.gif">
+  <img src="https://gh.0x535a.cn/img/20250409232913.png">
+  <img src="https://gh.0x535a.cn/img/e1d6503ad000a2fd92f71f3afce7d059.gif">
 </div>
 
 # 使用参数，参照截图
@@ -68,7 +68,7 @@ compose 通过 `env_file: .env` 注入全部环境变量，并把 `./data` 挂�
 SQLite数据库默认存放在`assets/lyrics.db`，仍然建议将`/app/assets`挂载为持久化目录。
 
 # 二进制部署
-可以到action里面去获取最新的二进制版本，也可以去release里面获取稳定的二进制版本
+可以到 [GitLab CI/CD 流水线](https://gitlab.com/stephenzeng/LrcAPI-Go/-/pipelines) 的构建任务中下载最新二进制（artifacts 保留 90 天），也可以到 [Releases](https://gitlab.com/stephenzeng/LrcAPI-Go/-/releases) 下载稳定版本。
 
 # 注册为systemctl服务
 下面是`/etc/systemd/system/lrcAPI.service`模板
