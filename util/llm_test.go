@@ -1,6 +1,7 @@
 package util
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -395,4 +396,60 @@ func TestCompleteLyricDelegatesToBatch(t *testing.T) {
 	if len(orig) != 2 || len(trans) != 2 {
 		t.Fatalf("orig=%d trans=%d", len(orig), len(trans))
 	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestThinkingParam(t *testing.T) {
+	cases := []struct {
+		env  string
+		want *bool
+	}{
+		{"", nil},
+		{"false", boolPtr(false)},
+		{"0", boolPtr(false)},
+		{"no", boolPtr(false)},
+		{"off", boolPtr(false)},
+		{"true", boolPtr(true)},
+		{"1", boolPtr(true)},
+		{"yes", boolPtr(true)},
+		{"on", boolPtr(true)},
+		{"FALSE", boolPtr(false)},
+		{"  True  ", boolPtr(true)},
+		{"garbage", nil},
+	}
+	for _, c := range cases {
+		OpenAIEnableThinking = c.env
+		got := thinkingParam()
+		if (got == nil) != (c.want == nil) {
+			t.Errorf("env=%q got=%v want=%v", c.env, got, c.want)
+			continue
+		}
+		if got != nil && *got != *c.want {
+			t.Errorf("env=%q got=%v want=%v", c.env, *got, *c.want)
+		}
+	}
+	OpenAIEnableThinking = ""
+}
+
+// 未配置时请求体不应出现 enable_thinking；配置为 false 时应显式带上。
+func TestChatRequestThinkingOmitEmpty(t *testing.T) {
+	OpenAIEnableThinking = ""
+	b, err := json.Marshal(chatRequest{Model: "m", EnableThinking: thinkingParam()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "enable_thinking") {
+		t.Errorf("expected enable_thinking omitted, got %s", b)
+	}
+
+	OpenAIEnableThinking = "false"
+	b, err = json.Marshal(chatRequest{Model: "m", EnableThinking: thinkingParam()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"enable_thinking":false`) {
+		t.Errorf("expected enable_thinking:false, got %s", b)
+	}
+	OpenAIEnableThinking = ""
 }

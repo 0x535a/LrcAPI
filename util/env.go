@@ -37,6 +37,11 @@ var (
 	OpenAIBaseURL string
 	// 使用的模型名，如 deepseek-v4-flash
 	OpenAIModel string
+	// OpenAIEnableThinking 控制推理模型的「思考」开关（仅对支持的网关/模型有效，
+	// 如 Qwen3 的 enable_thinking）。留空=不发送该参数，保持上游默认；
+	// "false"/"0"/"no"/"off"=显式关闭（歌词翻译/罗马音无需推理，关闭可大幅提速）；
+	// "true"/"1"/"yes"/"on"=显式开启。
+	OpenAIEnableThinking string
 )
 
 // LoadEnv 从给定 .env 文件（若存在）读取键值对写入进程环境变量，
@@ -71,6 +76,7 @@ func LoadEnv(path string) {
 	OpenAIAPIKey = os.Getenv("OPENAI_API_KEY")
 	OpenAIBaseURL = strings.TrimRight(os.Getenv("OPENAI_BASE_URL"), "/")
 	OpenAIModel = os.Getenv("OPENAI_MODEL")
+	OpenAIEnableThinking = os.Getenv("OPENAI_ENABLE_THINKING")
 }
 
 // loadDotEnvFile 解析形如 KEY=VALUE 的 .env 文件。

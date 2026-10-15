@@ -77,6 +77,24 @@ type chatRequest struct {
 	Messages    []chatMessage `json:"messages"`
 	Temperature float64       `json:"temperature"`
 	Stream      bool          `json:"stream"`
+	// EnableThinking 仅在显式配置 OPENAI_ENABLE_THINKING 时发送（omitempty + 指针），
+	// 用于关闭 Qwen3 等推理模型的思考模式以提速；不设置则保持上游默认。
+	EnableThinking *bool `json:"enable_thinking,omitempty"`
+}
+
+// thinkingParam 把 OPENAI_ENABLE_THINKING 解析为 *bool；
+// 未设置或无法识别时返回 nil（请求中省略该字段）。
+func thinkingParam() *bool {
+	switch strings.ToLower(strings.TrimSpace(OpenAIEnableThinking)) {
+	case "false", "0", "no", "off":
+		v := false
+		return &v
+	case "true", "1", "yes", "on":
+		v := true
+		return &v
+	default:
+		return nil
+	}
 }
 
 type chatResponse struct {
@@ -156,8 +174,9 @@ func chatCompleteOnce(system, user string) (string, error) {
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		Temperature: 0,
-		Stream:      false,
+		Temperature:    0,
+		Stream:         false,
+		EnableThinking: thinkingParam(),
 	}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
