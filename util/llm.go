@@ -376,68 +376,140 @@ func buildBlended(original []LyricLine, trans map[int]string) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func CompleteLyric(lyric, romaji string) (newLyric string, newRomaji string, changed bool, err error) {
-	newLyric, newRomaji = lyric, romaji
-	if !LLMEnabled() {
-		return newLyric, newRomaji, false, nil
+// CompletionInput 是批量补全的输入单元。
+type CompletionInput struct {
+	Lyric  string
+	Romaji string
+}
+
+// CompletionOutput 是批量补全的输出单元，与输入 items 一一对应。
+type CompletionOutput struct {
+	Lyric   string
+	Romaji  string
+	Changed bool
+}
+
+// CompleteLyricsBatch 对多条歌词批量补全。
+//
+// 与逐条调用 CompleteLyric 不同，它把所有条目中「需要翻译」的原文行合并成一次
+// 编号请求、所有「需要罗马音」的原文行合并成另一次请求（内部仍按 llmChunkSize
+// 分块并顺序执行），从而把请求数从「每条歌词各 2 发」降到「每批最多 2 类请求」，
+// 并避免大量并发请求打满上游限流（429）。
+//
+// 返回值与 items 一一对应。即使中途出错，已完成的部分（例如翻译成功但罗马音
+// 失败）也会保留在结果里，同时返回 err，调用方可据此写回部分内容。
+func CompleteLyricsBatch(items []CompletionInput) ([]CompletionOutput, error) {
+	results := make([]CompletionOutput, len(items))
+	for i, it := range items {
+		results[i] = CompletionOutput{Lyric: it.Lyric, Romaji: it.Romaji}
+	}
+	if len(items) == 0 || !LLMEnabled() {
+		return results, nil
 	}
 
-	original, translation := originalAndTranslation(lyric)
-	lang := detectLang(joinOriginalText(original))
-
-	needTrans := (lang == LangOther || lang == LangJapanese || lang == LangKorean) && !hasChineseTranslation(translation)
-	needRoma := (lang == LangJapanese || lang == LangKorean) && !hasRomaji(romaji)
-	if !needTrans && !needRoma {
-		return newLyric, newRomaji, false, nil
+	// lineRef 记录合并后某一行属于哪个条目的第几条原文行。
+	type lineRef struct {
+		item    int
+		origIdx int
+	}
+	type parsedItem struct {
+		original []LyricLine
 	}
 
-	var idxs []int
-	var texts []string
-	for i, ln := range original {
-		if strings.TrimSpace(ln.Text) != "" {
-			idxs = append(idxs, i)
-			texts = append(texts, ln.Text)
+	parsed := make([]parsedItem, len(items))
+	var transLines []string
+	var transRefs []lineRef
+	var romaLines []string
+	var romaRefs []lineRef
+
+	for i, it := range items {
+		original, translation := originalAndTranslation(it.Lyric)
+		lang := detectLang(joinOriginalText(original))
+		needTrans := (lang == LangOther || lang == LangJapanese || lang == LangKorean) && !hasChineseTranslation(translation)
+		needRoma := (lang == LangJapanese || lang == LangKorean) && !hasRomaji(it.Romaji)
+		parsed[i] = parsedItem{original: original}
+		if !needTrans && !needRoma {
+			continue
 		}
-	}
-	if len(texts) == 0 {
-		return newLyric, newRomaji, false, nil
-	}
-
-	if needTrans {
-		out, e := llmTransform(translateSystemPrompt, texts)
-		if e != nil {
-			return newLyric, newRomaji, changed, e
-		}
-		if out != nil {
-			transByIdx := make(map[int]string, len(idxs))
-			for k, i := range idxs {
-				transByIdx[i] = strings.TrimSpace(out[k])
+		for j, ln := range original {
+			if strings.TrimSpace(ln.Text) == "" {
+				continue
 			}
-			newLyric = buildBlended(original, transByIdx)
-			changed = true
+			if needTrans {
+				transLines = append(transLines, ln.Text)
+				transRefs = append(transRefs, lineRef{item: i, origIdx: j})
+			}
+			if needRoma {
+				romaLines = append(romaLines, ln.Text)
+				romaRefs = append(romaRefs, lineRef{item: i, origIdx: j})
+			}
 		}
 	}
 
-	if needRoma {
-		out, e := llmTransform(romajiSystemPrompt, texts)
-		if e != nil {
-			return newLyric, newRomaji, changed, e
+	// 一次（分块顺序的）翻译请求，覆盖本批所有需要翻译的行。
+	if len(transLines) > 0 {
+		out, err := llmTransform(translateSystemPrompt, transLines)
+		if err != nil {
+			return results, err
 		}
 		if out != nil {
-			var sb strings.Builder
-			for k, i := range idxs {
+			byItem := make(map[int]map[int]string)
+			for k, ref := range transRefs {
+				if byItem[ref.item] == nil {
+					byItem[ref.item] = make(map[int]string)
+				}
+				byItem[ref.item][ref.origIdx] = strings.TrimSpace(out[k])
+			}
+			for item, trans := range byItem {
+				results[item].Lyric = buildBlended(parsed[item].original, trans)
+				results[item].Changed = true
+			}
+		}
+	}
+
+	// 一次（分块顺序的）罗马音请求，覆盖本批所有需要罗马音的行。
+	if len(romaLines) > 0 {
+		out, err := llmTransform(romajiSystemPrompt, romaLines)
+		if err != nil {
+			return results, err
+		}
+		if out != nil {
+			byItem := make(map[int][]LyricLine)
+			for k, ref := range romaRefs {
 				r := strings.TrimSpace(out[k])
 				if r == "" {
 					continue
 				}
-				sb.WriteString(original[i].Timestamp)
-				sb.WriteString(r)
-				sb.WriteString("\n")
+				byItem[ref.item] = append(byItem[ref.item], LyricLine{
+					Timestamp: parsed[ref.item].original[ref.origIdx].Timestamp,
+					Text:      r,
+				})
 			}
-			newRomaji = strings.TrimRight(sb.String(), "\n")
-			changed = true
+			for i := range results {
+				lines, ok := byItem[i]
+				if !ok {
+					continue
+				}
+				var sb strings.Builder
+				for _, ln := range lines {
+					sb.WriteString(ln.Timestamp)
+					sb.WriteString(ln.Text)
+					sb.WriteString("\n")
+				}
+				results[i].Romaji = strings.TrimRight(sb.String(), "\n")
+				results[i].Changed = true
+			}
 		}
 	}
 
-	return newLyric, newRomaji, changed, nil
+	return results, nil
+}
+
+// CompleteLyric 补全单条歌词，等价于对单元素切片调用 CompleteLyricsBatch。
+func CompleteLyric(lyric, romaji string) (newLyric string, newRomaji string, changed bool, err error) {
+	res, err := CompleteLyricsBatch([]CompletionInput{{Lyric: lyric, Romaji: romaji}})
+	if len(res) == 0 {
+		return lyric, romaji, false, err
+	}
+	return res[0].Lyric, res[0].Romaji, res[0].Changed, err
 }

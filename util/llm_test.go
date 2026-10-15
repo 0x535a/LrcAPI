@@ -312,3 +312,87 @@ func TestSwapInvokeChatRestores(t *testing.T) {
 	}
 	_ = prev
 }
+
+// 批量补全应把多条歌词的翻译合并成一次请求、罗马音合并成另一次请求，
+// 而不是每条各打一发；同时正确把结果分发回各条目。
+func TestCompleteLyricsBatchMinimalCalls(t *testing.T) {
+	enableTestLLM(t)
+	prev := llmChunkSize
+	llmChunkSize = 100
+	t.Cleanup(func() { llmChunkSize = prev })
+
+	var transCalls, romaCalls int
+	restore := SwapInvokeChat(func(system, user string) (string, error) {
+		if strings.Contains(system, "罗马音") {
+			romaCalls++
+		} else {
+			transCalls++
+		}
+		return mockTranslate(system, user)
+	})
+	defer restore()
+
+	items := []CompletionInput{
+		{Lyric: "[00:01.00]こんにちは\n[00:02.00]ありがとう"}, // 日语：翻译+罗马音
+		{Lyric: "[00:01.00]Hello world"},            // 英语：仅翻译
+		{Lyric: "[00:01.00]你好世界"},                   // 中文：已完备，不触发
+	}
+	res, err := CompleteLyricsBatch(items)
+	if err != nil {
+		t.Fatalf("CompleteLyricsBatch: %v", err)
+	}
+	if len(res) != 3 {
+		t.Fatalf("len=%d want 3", len(res))
+	}
+	// 三条歌词的翻译合并成 1 次请求，罗马音合并成 1 次请求
+	if transCalls != 1 {
+		t.Errorf("transCalls=%d want 1", transCalls)
+	}
+	if romaCalls != 1 {
+		t.Errorf("romaCalls=%d want 1", romaCalls)
+	}
+	// item0 日语：翻译+罗马音都补齐，时间戳保留
+	if !res[0].Changed {
+		t.Error("item0 should change")
+	}
+	if !IsLyricComplete(res[0].Lyric, res[0].Romaji) {
+		t.Errorf("item0 not complete: lyric=%q romaji=%q", res[0].Lyric, res[0].Romaji)
+	}
+	if !strings.Contains(res[0].Romaji, "[00:01.00]") || !strings.Contains(res[0].Romaji, "[00:02.00]") {
+		t.Errorf("item0 romaji missing timestamps: %q", res[0].Romaji)
+	}
+	// item1 英语：只补翻译，不应有罗马音
+	if !res[1].Changed {
+		t.Error("item1 should change")
+	}
+	if res[1].Romaji != "" {
+		t.Errorf("item1 should have no romaji: %q", res[1].Romaji)
+	}
+	if !strings.Contains(res[1].Lyric, "译") {
+		t.Errorf("item1 missing translation: %q", res[1].Lyric)
+	}
+	// item2 中文：无需处理
+	if res[2].Changed {
+		t.Error("item2 (chinese) should not change")
+	}
+}
+
+// 单条委托给批量实现后，行为应与原 CompleteLyric 一致（翻译+罗马音、时间戳对齐）。
+func TestCompleteLyricDelegatesToBatch(t *testing.T) {
+	enableTestLLM(t)
+	restore := SwapInvokeChat(mockTranslate)
+	defer restore()
+
+	lyric := "[00:01.00]こんにちは\n[00:05.00]ありがとう"
+	newLyric, newRomaji, changed, err := CompleteLyric(lyric, "")
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if !IsLyricComplete(newLyric, newRomaji) {
+		t.Fatalf("not complete: lyric=%q romaji=%q", newLyric, newRomaji)
+	}
+	orig, trans := originalAndTranslation(newLyric)
+	if len(orig) != 2 || len(trans) != 2 {
+		t.Fatalf("orig=%d trans=%d", len(orig), len(trans))
+	}
+}

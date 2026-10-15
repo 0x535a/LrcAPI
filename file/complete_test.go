@@ -263,3 +263,103 @@ func TestCompleteLyricsMockRoundTrip(t *testing.T) {
 		t.Fatal("expected complete")
 	}
 }
+
+// 多歌曲批量补全：两首歌合并成「翻译 1 次 + 罗马音 1 次」共 2 次 LLM 调用，
+// 而不是每首各 2 次；且两首都应变完备。
+func TestCompleteManyBatchesSongs(t *testing.T) {
+	useTempLyricsDB(t)
+	enableTestLLM(t)
+	resetCompleteFailures()
+	t.Cleanup(resetCompleteFailures)
+
+	writeIncompleteJA(t, "artistA - songA", "0")
+	writeIncompleteJA(t, "artistB - songB", "0")
+
+	var calls atomic.Int32
+	restore := util.SwapInvokeChat(func(system, user string) (string, error) {
+		calls.Add(1)
+		return mockTranslate(system, user)
+	})
+	defer restore()
+
+	if err := completeMany([]string{"artistA - songA", "artistB - songB"}); err != nil {
+		t.Fatalf("completeMany: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Errorf("LLM calls=%d want 2 (两首歌应合并请求)", calls.Load())
+	}
+	for _, key := range []string{"artistA - songA", "artistB - songB"} {
+		var read File
+		read.FolderName = key
+		if err := read.ReadLyric(); err != nil {
+			t.Fatalf("ReadLyric %q: %v", key, err)
+		}
+		if !read.InfoLyric[0].IsComplete {
+			t.Errorf("%q not complete after batch", key)
+		}
+	}
+}
+
+// 全库回填：IncompleteCacheKeys 列出待补歌曲，backfillAll 顺序批量补齐后清空。
+func TestBackfillAllCompletesIncomplete(t *testing.T) {
+	useTempLyricsDB(t)
+	enableTestLLM(t)
+	resetCompleteFailures()
+	t.Cleanup(resetCompleteFailures)
+
+	writeIncompleteJA(t, "artistA - songA", "0")
+	writeIncompleteJA(t, "artistB - songB", "0")
+
+	restore := util.SwapInvokeChat(mockTranslate)
+	defer restore()
+
+	keys, err := IncompleteCacheKeys()
+	if err != nil {
+		t.Fatalf("IncompleteCacheKeys: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("IncompleteCacheKeys=%v want 2 keys", keys)
+	}
+
+	if err := backfillAll(12); err != nil {
+		t.Fatalf("backfillAll: %v", err)
+	}
+
+	rest, err := IncompleteCacheKeys()
+	if err != nil {
+		t.Fatalf("IncompleteCacheKeys after: %v", err)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("after backfill still incomplete: %v", rest)
+	}
+}
+
+// 回填时应跳过处于失败冷却中的歌曲，不为其调用 LLM。
+func TestBackfillRespectsCooldown(t *testing.T) {
+	useTempLyricsDB(t)
+	enableTestLLM(t)
+	resetCompleteFailures()
+	t.Cleanup(resetCompleteFailures)
+	oldLimit, oldCool := completeFailLimit, completeCooldown
+	completeFailLimit = 2
+	completeCooldown = time.Hour
+	t.Cleanup(func() { completeFailLimit, completeCooldown = oldLimit, oldCool })
+
+	writeIncompleteJA(t, "artistA - songA", "0")
+	recordCompleteFail("artistA - songA", "0")
+	recordCompleteFail("artistA - songA", "0")
+
+	var calls atomic.Int32
+	restore := util.SwapInvokeChat(func(system, user string) (string, error) {
+		calls.Add(1)
+		return mockTranslate(system, user)
+	})
+	defer restore()
+
+	if err := backfillAll(12); err != nil {
+		t.Fatalf("backfillAll: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Errorf("LLM called %d times for cooled-down song", calls.Load())
+	}
+}

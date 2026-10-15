@@ -22,6 +22,7 @@ func Handler(port, passwd string) {
 	r = gin.New()
 	r.Use(cors.New(config))
 	r.GET("/lrc", lyricHandler)
+	r.GET("/backfill", backfillHandler)
 	r.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{})
 	})
