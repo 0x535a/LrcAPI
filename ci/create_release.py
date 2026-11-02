@@ -40,9 +40,10 @@ def main():
         print(f"Uploaded {binary.name}")
 
     release_url = f"{project_api}/releases/{quote(tag, safe='')}"
+    notes_path = Path(__file__).resolve().parent.parent / "RELEASE_NOTES.md"
     payload = {
         "name": tag,
-        "description": f"lrcAPI {tag}",
+        "description": notes_path.read_text(encoding="utf-8") if notes_path.is_file() else f"lrcAPI {tag}",
         "assets": {"links": links},
     }
     try:

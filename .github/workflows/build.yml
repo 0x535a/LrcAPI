@@ -64,5 +64,6 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: RELEASE_NOTES.md
           files: dist/**/*
           token: ${{ secrets.GITHUB_TOKEN }}
