@@ -40,39 +40,6 @@ build:binary:
       - GOOS: [linux, windows, darwin]
         GOARCH: [amd64, arm64]
 
-docker:
-  stage: build
-  image: docker:29-cli
-  tags:
-    - self-hosted
-  environment:
-    name: DOCKERHUB
-  variables:
-    DOCKER_HOST: unix:///var/run/docker.sock
-  parallel:
-    matrix:
-      - ARCH: amd64
-        DOCKER_REPOSITORY: lrcapi-go
-      - ARCH: arm64
-        DOCKER_REPOSITORY: lrcapi-go-arm
-  script:
-    - |
-      : "${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME in GitLab CI/CD variables}"
-      : "${DOCKERHUB_TOKEN:?Set DOCKERHUB_TOKEN in GitLab CI/CD variables}"
-      export DOCKER_CONFIG="$(mktemp -d)"
-      trap 'rm -rf "$DOCKER_CONFIG"' EXIT
-      printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
-      image="${DOCKERHUB_USERNAME}/${DOCKER_REPOSITORY}"
-      set -- --tag "${image}:latest"
-      if [ -n "${CI_COMMIT_TAG:-}" ]; then
-        set -- "$@" --tag "${image}:${CI_COMMIT_TAG}"
-      fi
-      docker buildx build \
-        --platform "linux/${ARCH}" \
-        --file "Dockerfile.d/${ARCH}" \
-        --build-arg "GOPROXY=${GOPROXY}" \
-        "$@" --push .
-
 release:
   stage: release
   image: python:3.13-alpine
